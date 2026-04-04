@@ -6,7 +6,7 @@ A terminal-based network packet sniffer with a live TUI showing real-time traffi
 
 ## Features
 
-- Live packet feed — TCP, UDP, DNS, HTTP, ICMP
+- Live packet feed; TCP, UDP, DNS, HTTP, ICMP
 - Security alerts panel with risk explanations and fixes
 - Top Talkers panel showing the busiest IPs with traffic bars
 - 5 built-in themes (press `t` to cycle)
@@ -22,7 +22,7 @@ cd terminalpacketsniffer
 sudo ./install
 ```
 
-That's it. The install script handles everything — virtual environment, dependencies, and registering the command globally. No manual pip installs needed.
+That's it. The install script handles everything virtual environment, dependencies, and registering the command globally. No manual pip installs needed.
 
 ## Run
 
