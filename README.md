@@ -1,8 +1,8 @@
-# Terminal Packet Sniffer
+# Terminal Packet Sniffer `v0.12`
 
 A terminal-based network packet sniffer with a live TUI showing real-time traffic and automatic security alerts.
 
-![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Version](https://img.shields.io/badge/version-0.12-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 ## Features
 
