@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Packet Sniffer TUI — live traffic + security alerts + top talkers
-Run with: sudo venv/bin/python sniffer_tui.py [-i INTERFACE] [-p PROTOCOL] [--host IP] [--port PORT]
-"""
 
 import argparse
 import threading
@@ -13,7 +9,7 @@ try:
     from scapy.all import sniff, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw
     from scapy.layers.http import HTTPRequest, HTTPResponse
 except ImportError:
-    print("scapy not found — run: pip install scapy")
+    print("scapy not found - run: pip install scapy")
     exit(1)
 
 try:
@@ -22,11 +18,10 @@ try:
     from textual.containers import Horizontal, Vertical
     from rich.text import Text
 except ImportError:
-    print("textual not found — run: pip install textual")
+    print("textual not found - run: pip install textual")
     exit(1)
 
 
-# ── Severity → color ──────────────────────────────────────────────────────────
 SEV_COLOR = {
     "CRITICAL": "bold white on red",
     "HIGH":     "bold red",
@@ -35,8 +30,6 @@ SEV_COLOR = {
     "INFO":     "dim white",
 }
 
-# ── Alert explanations ────────────────────────────────────────────────────────
-# Each entry: (risk explanation, recommended fix)
 ALERT_INFO: dict[str, tuple[str, str]] = {
     "Cleartext HTTP": (
         "Passwords, session cookies, and form data travel in plain text. "
@@ -44,7 +37,7 @@ ALERT_INFO: dict[str, tuple[str, str]] = {
         "Switch to HTTPS (port 443). HTTP should never carry sensitive data.",
     ),
     "Telnet (cleartext)": (
-        "Every keystroke — including your password — is sent unencrypted. "
+        "Every keystroke including your password is sent unencrypted. "
         "A single packet capture is enough to steal credentials.",
         "Replace Telnet with SSH immediately. There is no safe use of Telnet.",
     ),
@@ -54,7 +47,7 @@ ALERT_INFO: dict[str, tuple[str, str]] = {
         "Use SFTP or FTPS instead. Most modern servers support both.",
     ),
     "Port Scan": (
-        "An IP is probing many ports in rapid succession — the classic first "
+        "An IP is probing many ports in rapid succession - the classic first "
         "step of an attack to map what services are running on your network.",
         "Block the source IP at your firewall. Check if it's an internal host "
         "running a misconfigured scanner.",
@@ -72,11 +65,10 @@ ALERT_INFO: dict[str, tuple[str, str]] = {
     "Suspicious DNS": (
         "A DNS query contains keywords associated with tracking, C2 servers, "
         "or malware infrastructure. Could indicate an infected host phoning home.",
-        "Block the domain at your DNS resolver. Inspect the querying device for "
-        "malware.",
+        "Block the domain at your DNS resolver. Inspect the querying device for malware.",
     ),
     "Possible DNS Tunnel": (
-        "Unusually long DNS labels are a classic sign of DNS tunneling — a "
+        "Unusually long DNS labels are a classic sign of DNS tunneling - a "
         "technique used to exfiltrate data or bypass firewalls by encoding "
         "traffic inside DNS queries.",
         "Inspect DNS traffic from this host closely. Block long-label queries "
@@ -84,7 +76,6 @@ ALERT_INFO: dict[str, tuple[str, str]] = {
     ),
 }
 
-# ── Known IP prefixes ─────────────────────────────────────────────────────────
 _IP_OWNERS = [
     ("192.168.", "LAN"),   ("10.",      "LAN"),   ("172.16.", "LAN"),
     ("17.",      "Apple"), ("104.18.",  "Cloudflare"), ("172.65.", "Cloudflare"),
@@ -111,14 +102,12 @@ class SnifferApp(App):
         height: 1fr;
     }
 
-    /* ── left: live packets ── */
     #left {
         width: 58%;
         border: tall $primary;
         padding: 0 1;
     }
 
-    /* ── right: alerts + talkers stacked ── */
     #right {
         layout: vertical;
         width: 42%;
@@ -136,7 +125,6 @@ class SnifferApp(App):
         padding: 0 1;
     }
 
-    /* ── bottom stats bar ── */
     #stats {
         height: 1;
         background: $primary-darken-3;
@@ -147,10 +135,10 @@ class SnifferApp(App):
     """
 
     BINDINGS = [
-        ("q",       "quit",       "Quit"),
-        ("c",       "clear_all",  "Clear"),
-        ("p",       "pause",      "Pause"),
-        ("t",       "next_theme", "Theme"),
+        ("q", "quit",       "Quit"),
+        ("c", "clear_all",  "Clear"),
+        ("p", "pause",      "Pause"),
+        ("t", "next_theme", "Theme"),
     ]
 
     THEMES = [
@@ -163,23 +151,18 @@ class SnifferApp(App):
 
     def __init__(self, interface=None, bpf_filter=None):
         super().__init__()
-        self.interface   = interface
-        self.bpf_filter  = bpf_filter
-        self.paused      = False
-        self._theme_idx  = 0
+        self.interface  = interface
+        self.bpf_filter = bpf_filter
+        self.paused     = False
+        self._theme_idx = 0
 
         self.stats: dict[str, int] = defaultdict(int)
         self._alert_seen: dict[str, int] = defaultdict(int)
-
-        # detection trackers
         self._syn_ports:  dict[str, set] = defaultdict(set)
         self._rst_count:  dict[str, int] = defaultdict(int)
         self._icmp_count: dict[str, int] = defaultdict(int)
+        self._ip_count:   dict[str, int] = defaultdict(int)
 
-        # top talkers: ip → packet count
-        self._ip_count: dict[str, int] = defaultdict(int)
-
-    # ── Layout ────────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="body"):
@@ -205,7 +188,6 @@ class SnifferApp(App):
         self.set_interval(1.0, self._refresh_stats)
         self.set_interval(2.0, self._refresh_talkers)
 
-    # ── Sniff thread ──────────────────────────────────────────────────────────
     def _sniff_thread(self) -> None:
         sniff(
             iface=self.interface,
@@ -214,7 +196,6 @@ class SnifferApp(App):
             store=False,
         )
 
-    # ── Packet handler ────────────────────────────────────────────────────────
     def _on_packet(self, pkt) -> None:
         if self.paused or IP not in pkt:
             return
@@ -228,7 +209,6 @@ class SnifferApp(App):
         self._ip_count[src] += 1
         self._ip_count[dst] += 1
 
-        # ── TCP ───────────────────────────────────────────────────────────────
         if TCP in pkt:
             self.stats["TCP"] += 1
             sp, dp = pkt[TCP].sport, pkt[TCP].dport
@@ -242,7 +222,7 @@ class SnifferApp(App):
                 log.write(Text.assemble(
                     ("HTTP REQ  ", "bold green"),
                     (f"{ts}  ", "dim white"),
-                    (f"{src}:{sp} → {dst}:{dp}", "white"),
+                    (f"{src}:{sp} -> {dst}:{dp}", "white"),
                     (f"\n          {method} {host}{path}", "green"),
                 ))
                 self._alert("HIGH", "Cleartext HTTP", f"{src}  {method} {host}{path}")
@@ -256,13 +236,13 @@ class SnifferApp(App):
                 log.write(Text.assemble(
                     ("HTTP RES  ", "bold green"),
                     (f"{ts}  ", "dim white"),
-                    (f"{src}:{sp} → {dst}:{dp}  status={code}", "white"),
+                    (f"{src}:{sp} -> {dst}:{dp}  status={code}", "white"),
                 ))
                 return
 
             for port, name, sev in ((23, "Telnet", "CRITICAL"), (21, "FTP", "HIGH")):
                 if sp == port or dp == port:
-                    self._alert(sev, f"{name} (cleartext)", f"{src}:{sp} → {dst}:{dp}")
+                    self._alert(sev, f"{name} (cleartext)", f"{src}:{sp} -> {dst}:{dp}")
 
             if "S" in flags and "A" not in flags:
                 self._syn_ports[src].add(dp)
@@ -279,7 +259,7 @@ class SnifferApp(App):
             row = Text.assemble(
                 ("TCP       ", "bold cyan"),
                 (f"{ts}  ", "dim white"),
-                (f"{src}:{sp} → {dst}:{dp}  ", "white"),
+                (f"{src}:{sp} -> {dst}:{dp}  ", "white"),
                 (f"flags={flags}", "dim cyan"),
             )
             if Raw in pkt:
@@ -289,7 +269,6 @@ class SnifferApp(App):
             log.write(row)
             return
 
-        # ── UDP / DNS ─────────────────────────────────────────────────────────
         if UDP in pkt:
             self.stats["UDP"] += 1
             sp, dp = pkt[UDP].sport, pkt[UDP].dport
@@ -302,7 +281,7 @@ class SnifferApp(App):
                     log.write(Text.assemble(
                         ("DNS QRY   ", "bold magenta"),
                         (f"{ts}  ", "dim white"),
-                        (f"{src} → ", "white"),
+                        (f"{src} -> ", "white"),
                         (name, "magenta"),
                     ))
                     self._check_dns(src, name)
@@ -313,18 +292,17 @@ class SnifferApp(App):
                     log.write(Text.assemble(
                         ("DNS RPL   ", "bold magenta"),
                         (f"{ts}  ", "dim white"),
-                        (f"{name} → {rdata}", "white"),
+                        (f"{name} -> {rdata}", "white"),
                     ))
                     return
 
             log.write(Text.assemble(
                 ("UDP       ", "bold yellow"),
                 (f"{ts}  ", "dim white"),
-                (f"{src}:{sp} → {dst}:{dp}", "white"),
+                (f"{src}:{sp} -> {dst}:{dp}", "white"),
             ))
             return
 
-        # ── ICMP ──────────────────────────────────────────────────────────────
         if ICMP in pkt:
             self.stats["ICMP"] += 1
             self._icmp_count[src] += 1
@@ -334,24 +312,22 @@ class SnifferApp(App):
             log.write(Text.assemble(
                 ("ICMP      ", "bold red"),
                 (f"{ts}  ", "dim white"),
-                (f"{src} → {dst}  {kind}", "white"),
+                (f"{src} -> {dst}  {kind}", "white"),
             ))
             c = self._icmp_count[src]
             if c in (30, 100):
                 self._alert("MEDIUM", "ICMP Flood", f"{src} sent {c} ICMP packets")
 
-    # ── DNS heuristics ────────────────────────────────────────────────────────
     def _check_dns(self, src: str, name: str) -> None:
         BAD_KEYWORDS = {"track", "beacon", "telemetry", "c2", "cnc",
                         "botnet", "malware", "exfil", "keylog"}
         for kw in BAD_KEYWORDS:
             if kw in name.lower():
-                self._alert("HIGH", "Suspicious DNS", f"{src} → {name}")
+                self._alert("HIGH", "Suspicious DNS", f"{src} -> {name}")
                 return
         if any(len(l) > 40 for l in name.split(".")):
-            self._alert("MEDIUM", "Possible DNS Tunnel", f"{src} → {name[:80]}")
+            self._alert("MEDIUM", "Possible DNS Tunnel", f"{src} -> {name[:80]}")
 
-    # ── Alert writer ──────────────────────────────────────────────────────────
     def _alert(self, severity: str, title: str, detail: str) -> None:
         key = f"{severity}|{title}"
         self._alert_seen[key] += 1
@@ -364,9 +340,8 @@ class SnifferApp(App):
         alog  = self.query_one("#alert-log", RichLog)
         color = SEV_COLOR.get(severity, "white")
         ts    = datetime.now().strftime("%H:%M:%S")
-        badge = f" ×{n}" if n > 1 else ""
+        badge = f" x{n}" if n > 1 else ""
 
-        # base header + detail
         msg = Text.assemble(
             (f" {severity} ", color),
             (f" {ts}{badge}\n", "dim white"),
@@ -374,7 +349,6 @@ class SnifferApp(App):
             (f" {detail}\n",    "white"),
         )
 
-        # explanation block (only on first occurrence)
         if n == 1 and title in ALERT_INFO:
             risk, fix = ALERT_INFO[title]
             msg.append("\n Risk  ", style="bold yellow")
@@ -382,10 +356,9 @@ class SnifferApp(App):
             msg.append(" Fix   ", style="bold green")
             msg.append(fix + "\n", style="dim white")
 
-        msg.append("─" * 40 + "\n", style="dim white")
+        msg.append("-" * 40 + "\n", style="dim white")
         alog.write(msg)
 
-    # ── Top Talkers panel ─────────────────────────────────────────────────────
     def _refresh_talkers(self) -> None:
         if not self._ip_count:
             return
@@ -396,9 +369,9 @@ class SnifferApp(App):
 
         out = Text()
         for ip, count in top:
-            filled  = int((count / max_count) * bar_w)
-            bar     = "█" * filled + "░" * (bar_w - filled)
-            owner   = _ip_owner(ip)
+            filled = int((count / max_count) * bar_w)
+            bar    = "#" * filled + "." * (bar_w - filled)
+            owner  = _ip_owner(ip)
             out.append(f" {ip:<17}", style="white")
             out.append(bar, style="green")
             out.append(f"  {count:>5}  ", style="dim white")
@@ -406,13 +379,11 @@ class SnifferApp(App):
 
         self.query_one("#talkers", Static).update(out)
 
-    # ── Stats bar ─────────────────────────────────────────────────────────────
     def _refresh_stats(self) -> None:
         paused = "  [PAUSED]" if self.paused else ""
         parts  = "   ".join(f"{k}: {v}" for k, v in self.stats.items())
         self.query_one("#stats", Static).update(f"  {parts}{paused}")
 
-    # ── Key actions ───────────────────────────────────────────────────────────
     def action_clear_all(self) -> None:
         self.query_one("#pkt-log",   RichLog).clear()
         self.query_one("#alert-log", RichLog).clear()
@@ -427,7 +398,6 @@ class SnifferApp(App):
         self.notify(f"Theme: {label}", timeout=2)
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
 def build_bpf(args) -> str | None:
     parts = []
     if args.protocol:
