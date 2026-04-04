@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Packet Sniffer — auto-setup + launcher
+# Usage: packetsniffer [-i INTERFACE] [-p PROTOCOL] [--host IP] [--port PORT]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV="$SCRIPT_DIR/venv"
+PYTHON="$VENV/bin/python"
+PIP="$VENV/bin/pip"
+STAMP="$VENV/.installed"
+
+# ── 1. create venv if missing ─────────────────────────────────────────────────
+if [ ! -f "$PYTHON" ]; then
+    echo "[setup] creating virtual environment..."
+    python3 -m venv "$VENV"
+fi
+
+# ── 2. install deps if requirements changed ───────────────────────────────────
+if [ ! -f "$STAMP" ] || [ "$SCRIPT_DIR/requirements.txt" -nt "$STAMP" ]; then
+    echo "[setup] installing dependencies..."
+    "$PIP" install -q -r "$SCRIPT_DIR/requirements.txt"
+    touch "$STAMP"
+fi
+
+# ── 3. run (re-exec with sudo if needed for raw packet capture) ───────────────
+if [ "$EUID" -ne 0 ]; then
+    exec sudo "$PYTHON" "$SCRIPT_DIR/sniffer_tui.py" "$@"
+else
+    exec "$PYTHON" "$SCRIPT_DIR/sniffer_tui.py" "$@"
+fi

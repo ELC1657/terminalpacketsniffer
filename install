@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# One-time global install — run once, then `packetsniffer` works from anywhere.
+# Usage: sudo ./install
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET="/usr/local/bin/packetsniffer"
+
+if [ "$EUID" -ne 0 ]; then
+    echo "Run with sudo:  sudo ./install"
+    exit 1
+fi
+
+# make the launcher executable
+chmod +x "$SCRIPT_DIR/packetsniffer"
+
+# write a tiny wrapper in /usr/local/bin so it's on PATH everywhere
+cat > "$TARGET" << EOF
+#!/usr/bin/env bash
+exec "$SCRIPT_DIR/packetsniffer" "\$@"
+EOF
+
+chmod +x "$TARGET"
+echo "Done! You can now run:  packetsniffer"
