@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.13    | ✅ Current |
+| 0.20.0  | ✅ Current |
+| 0.13    | ❌ Outdated |
 | 0.12    | ❌ Outdated |
 
 ## Reporting a Vulnerability
