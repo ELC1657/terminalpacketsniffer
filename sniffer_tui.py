@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 
 try:
-    from scapy.all import sniff, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw
+    from scapy.all import sniff, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw, ARP, Ether
     from scapy.layers.http import HTTPRequest, HTTPResponse
 except ImportError:
     print("scapy not found - run: pip install scapy")
@@ -73,6 +73,13 @@ ALERT_INFO: dict[str, tuple[str, str]] = {
         "traffic inside DNS queries.",
         "Inspect DNS traffic from this host closely. Block long-label queries "
         "at your DNS firewall if tunneling is confirmed.",
+    ),
+    "ARP Spoofing": (
+        "Two different MAC addresses are claiming the same IP address. This is "
+        "the hallmark of ARP poisoning — an attacker is redirecting traffic "
+        "through their machine to intercept or modify it (MITM).",
+        "Identify the rogue MAC and block it at the switch. Enable Dynamic ARP "
+        "Inspection (DAI) on managed switches to prevent future poisoning.",
     ),
 }
 
@@ -162,6 +169,7 @@ class SnifferApp(App):
         self._rst_count:  dict[str, int] = defaultdict(int)
         self._icmp_count: dict[str, int] = defaultdict(int)
         self._ip_count:   dict[str, int] = defaultdict(int)
+        self._arp_table:  dict[str, set] = defaultdict(set)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -197,7 +205,14 @@ class SnifferApp(App):
         )
 
     def _on_packet(self, pkt) -> None:
-        if self.paused or IP not in pkt:
+        if self.paused:
+            return
+
+        if ARP in pkt:
+            self._handle_arp(pkt)
+            return
+
+        if IP not in pkt:
             return
 
         self.stats["Total"] += 1
@@ -239,6 +254,19 @@ class SnifferApp(App):
                     (f"{src}:{sp} -> {dst}:{dp}  status={code}", "white"),
                 ))
                 return
+
+            if (sp == 443 or dp == 443) and Raw in pkt:
+                sni = self._extract_sni(bytes(pkt[Raw].load))
+                if sni:
+                    self.stats["TLS"] += 1
+                    log.write(Text.assemble(
+                        ("TLS       ", "bold blue"),
+                        (f"{ts}  ", "dim white"),
+                        (f"{src}:{sp} -> {dst}:{dp}  ", "white"),
+                        ("SNI: ", "dim white"),
+                        (sni, "bold blue"),
+                    ))
+                    return
 
             for port, name, sev in ((23, "Telnet", "CRITICAL"), (21, "FTP", "HIGH")):
                 if sp == port or dp == port:
@@ -296,19 +324,36 @@ class SnifferApp(App):
                     ))
                     return
 
-            log.write(Text.assemble(
+            row = Text.assemble(
                 ("UDP       ", "bold yellow"),
                 (f"{ts}  ", "dim white"),
                 (f"{src}:{sp} -> {dst}:{dp}", "white"),
-            ))
+            )
+            if Raw in pkt:
+                snippet = pkt[Raw].load[:70].decode("utf-8", errors="ignore").replace("\n", " ").strip()
+                if snippet:
+                    row.append(f"\n          {snippet[:70]}", style="dim white")
+            log.write(row)
             return
 
         if ICMP in pkt:
             self.stats["ICMP"] += 1
             self._icmp_count[src] += 1
-            kind = {0: "Echo Reply", 8: "Echo Request", 3: "Dest Unreachable"}.get(
-                pkt[ICMP].type, f"type={pkt[ICMP].type}"
-            )
+            kind = {
+                0:  "Echo Reply",
+                3:  "Dest Unreachable",
+                4:  "Source Quench",
+                5:  "Redirect",
+                8:  "Echo Request",
+                9:  "Router Advertisement",
+                10: "Router Solicitation",
+                11: "TTL Exceeded",
+                12: "Parameter Problem",
+                13: "Timestamp Request",
+                14: "Timestamp Reply",
+                17: "Address Mask Request",
+                18: "Address Mask Reply",
+            }.get(pkt[ICMP].type, f"type={pkt[ICMP].type}")
             log.write(Text.assemble(
                 ("ICMP      ", "bold red"),
                 (f"{ts}  ", "dim white"),
@@ -317,6 +362,76 @@ class SnifferApp(App):
             c = self._icmp_count[src]
             if c in (30, 100):
                 self._alert("MEDIUM", "ICMP Flood", f"{src} sent {c} ICMP packets")
+
+    @staticmethod
+    def _extract_sni(data: bytes) -> str | None:
+        try:
+            # TLS record: type 0x16 = handshake
+            if len(data) < 6 or data[0] != 0x16:
+                return None
+            # Handshake type 0x01 = ClientHello
+            if data[5] != 0x01:
+                return None
+            # Skip: record header (5) + handshake type (1) + length (3)
+            #      + client version (2) + random (32) = offset 43
+            pos = 43
+            if len(data) <= pos:
+                return None
+            # session_id
+            sid_len = data[pos]; pos += 1 + sid_len
+            if len(data) < pos + 2:
+                return None
+            # cipher suites
+            cs_len = int.from_bytes(data[pos:pos+2], "big"); pos += 2 + cs_len
+            if len(data) < pos + 1:
+                return None
+            # compression methods
+            cm_len = data[pos]; pos += 1 + cm_len
+            if len(data) < pos + 2:
+                return None
+            # extensions
+            ext_total = int.from_bytes(data[pos:pos+2], "big"); pos += 2
+            end = pos + ext_total
+            while pos + 4 <= end and pos + 4 <= len(data):
+                ext_type = int.from_bytes(data[pos:pos+2], "big")
+                ext_len  = int.from_bytes(data[pos+2:pos+4], "big")
+                pos += 4
+                if ext_type == 0x0000 and ext_len >= 5:  # SNI extension
+                    name_len = int.from_bytes(data[pos+3:pos+5], "big")
+                    return data[pos+5:pos+5+name_len].decode("ascii", errors="ignore")
+                pos += ext_len
+        except Exception:
+            pass
+        return None
+
+    def _handle_arp(self, pkt) -> None:
+        self.stats["ARP"] += 1
+        arp = pkt[ARP]
+        ts  = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        log = self.query_one("#pkt-log", RichLog)
+
+        if arp.op == 1:  # who-has
+            log.write(Text.assemble(
+                ("ARP       ", "bold yellow"),
+                (f"{ts}  ", "dim white"),
+                ("who-has ", "white"),
+                (arp.pdst, "cyan"),
+                ("  tell ", "dim white"),
+                (arp.psrc, "cyan"),
+            ))
+        elif arp.op == 2:  # is-at
+            log.write(Text.assemble(
+                ("ARP       ", "bold yellow"),
+                (f"{ts}  ", "dim white"),
+                (arp.psrc, "cyan"),
+                (" is-at ", "white"),
+                (arp.hwsrc, "green"),
+            ))
+            self._arp_table[arp.psrc].add(arp.hwsrc)
+            if len(self._arp_table[arp.psrc]) > 1:
+                macs = ", ".join(self._arp_table[arp.psrc])
+                self._alert("CRITICAL", "ARP Spoofing",
+                            f"{arp.psrc} claimed by: {macs}")
 
     def _check_dns(self, src: str, name: str) -> None:
         BAD_KEYWORDS = {"track", "beacon", "telemetry", "c2", "cnc",
