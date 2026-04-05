@@ -2,7 +2,8 @@
 
 import argparse
 import threading
-from collections import defaultdict
+import time
+from collections import defaultdict, deque
 from datetime import datetime
 
 try:
@@ -80,6 +81,27 @@ ALERT_INFO: dict[str, tuple[str, str]] = {
         "through their machine to intercept or modify it (MITM).",
         "Identify the rogue MAC and block it at the switch. Enable Dynamic ARP "
         "Inspection (DAI) on managed switches to prevent future poisoning.",
+    ),
+    "DNS Exfil Rate": (
+        "A single host is making an abnormally high number of DNS queries per "
+        "second. This is a common sign of data exfiltration over DNS or an "
+        "infected host beaconing to a C2 server.",
+        "Capture and inspect the DNS queries from this host. Block the source "
+        "at your DNS firewall and scan the device for malware.",
+    ),
+    "New LAN Host": (
+        "An IP address appeared on your local network that has not been seen "
+        "before in this session. Could be a rogue device, a new connection, or "
+        "a spoofed address.",
+        "Verify the device is authorised. Check your DHCP leases and switch "
+        "port tables to identify the physical device.",
+    ),
+    "SYN Without SYN-ACK": (
+        "A host has many TCP connections stuck in SYN-sent state with no "
+        "SYN-ACK reply. This is the signature of a stealth (half-open) port "
+        "scan — the scanner never completes the handshake to avoid logging.",
+        "Block the scanning IP at the firewall. If it is an internal host, "
+        "investigate for malware or a misconfigured scanner.",
     ),
 }
 
@@ -164,12 +186,15 @@ class SnifferApp(App):
         self._theme_idx = 0
 
         self.stats: dict[str, int] = defaultdict(int)
-        self._alert_seen: dict[str, int] = defaultdict(int)
-        self._syn_ports:  dict[str, set] = defaultdict(set)
-        self._rst_count:  dict[str, int] = defaultdict(int)
-        self._icmp_count: dict[str, int] = defaultdict(int)
-        self._ip_count:   dict[str, int] = defaultdict(int)
-        self._arp_table:  dict[str, set] = defaultdict(set)
+        self._alert_seen: dict[str, int]   = defaultdict(int)
+        self._syn_ports:  dict[str, set]   = defaultdict(set)
+        self._rst_count:  dict[str, int]   = defaultdict(int)
+        self._icmp_count: dict[str, int]   = defaultdict(int)
+        self._ip_count:   dict[str, int]   = defaultdict(int)
+        self._arp_table:  dict[str, set]   = defaultdict(set)
+        self._dns_times:  dict[str, deque] = defaultdict(deque)
+        self._known_lan:  set[str]         = set()
+        self._half_open:  dict[tuple, float] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -195,6 +220,7 @@ class SnifferApp(App):
         threading.Thread(target=self._sniff_thread, daemon=True).start()
         self.set_interval(1.0, self._refresh_stats)
         self.set_interval(2.0, self._refresh_talkers)
+        self.set_interval(5.0, self._check_half_open)
 
     def _sniff_thread(self) -> None:
         sniff(
@@ -223,6 +249,10 @@ class SnifferApp(App):
 
         self._ip_count[src] += 1
         self._ip_count[dst] += 1
+
+        if self._is_lan(src) and src not in self._known_lan:
+            self._known_lan.add(src)
+            self._alert("LOW", f"New LAN Host: {src}", src)
 
         if TCP in pkt:
             self.stats["TCP"] += 1
@@ -273,16 +303,28 @@ class SnifferApp(App):
                     self._alert(sev, f"{name} (cleartext)", f"{src}:{sp} -> {dst}:{dp}")
 
             if "S" in flags and "A" not in flags:
+                # SYN — track for port scan and half-open detection
                 self._syn_ports[src].add(dp)
                 n = len(self._syn_ports[src])
                 if n in (15, 50, 100):
                     self._alert("MEDIUM", "Port Scan", f"{src} SYN'd {n} distinct ports")
+                self._half_open[(src, dst, sp, dp)] = time.monotonic()
+
+            elif "S" in flags and "A" in flags:
+                # SYN-ACK — server replied, connection completing
+                self._half_open.pop((dst, src, dp, sp), None)
 
             if "R" in flags:
                 self._rst_count[src] += 1
                 c = self._rst_count[src]
                 if c in (25, 100):
                     self._alert("LOW", "RST Flood / Scan", f"{src} sent {c} RST packets")
+                self._half_open.pop((src, dst, sp, dp), None)
+                self._half_open.pop((dst, src, dp, sp), None)
+
+            if "F" in flags:
+                self._half_open.pop((src, dst, sp, dp), None)
+                self._half_open.pop((dst, src, dp, sp), None)
 
             row = Text.assemble(
                 ("TCP       ", "bold cyan"),
@@ -433,6 +475,33 @@ class SnifferApp(App):
                 self._alert("CRITICAL", "ARP Spoofing",
                             f"{arp.psrc} claimed by: {macs}")
 
+    @staticmethod
+    def _is_lan(ip: str) -> bool:
+        if ip.startswith("10.") or ip.startswith("192.168."):
+            return True
+        if ip.startswith("172."):
+            try:
+                second = int(ip.split(".")[1])
+                return 16 <= second <= 31
+            except (IndexError, ValueError):
+                pass
+        return False
+
+    def _check_half_open(self) -> None:
+        now   = time.monotonic()
+        stale = [flow for flow, t in self._half_open.items() if now - t > 5.0]
+        if not stale:
+            return
+        per_src: dict[str, int] = defaultdict(int)
+        for flow in stale:
+            per_src[flow[0]] += 1
+        for src_ip, count in per_src.items():
+            if count >= 10:
+                self._alert("HIGH", "SYN Without SYN-ACK",
+                            f"{src_ip} has {count} half-open connections")
+        for flow in stale:
+            self._half_open.pop(flow, None)
+
     def _check_dns(self, src: str, name: str) -> None:
         BAD_KEYWORDS = {"track", "beacon", "telemetry", "c2", "cnc",
                         "botnet", "malware", "exfil", "keylog"}
@@ -442,6 +511,15 @@ class SnifferApp(App):
                 return
         if any(len(l) > 40 for l in name.split(".")):
             self._alert("MEDIUM", "Possible DNS Tunnel", f"{src} -> {name[:80]}")
+
+        now = time.monotonic()
+        dq  = self._dns_times[src]
+        dq.append(now)
+        while dq and dq[0] < now - 1.0:
+            dq.popleft()
+        rate = len(dq)
+        if rate in (10, 20, 50):
+            self._alert("HIGH", "DNS Exfil Rate", f"{src} sent {rate} DNS queries/sec")
 
     def _alert(self, severity: str, title: str, detail: str) -> None:
         key = f"{severity}|{title}"

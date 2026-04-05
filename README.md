@@ -1,12 +1,15 @@
-# Terminal Packet Sniffer `v0.12`
+# Terminal Packet Sniffer `v0.13`
 
 A terminal-based network packet sniffer with a live TUI showing real-time traffic and automatic security alerts.
 
-![Version](https://img.shields.io/badge/version-0.12-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Version](https://img.shields.io/badge/version-0.13-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 ## Features
 
-- Live packet feed; TCP, UDP, DNS, HTTP, ICMP
+- Live packet feed: TCP, UDP, DNS, HTTP, ICMP, ARP, TLS
+- TLS SNI extraction — see which HTTPS hostnames are being visited without decryption
+- ARP monitoring — displays who-has/is-at and detects ARP spoofing attacks
+- UDP payload snippets — shows decoded payload alongside UDP packets
 - Security alerts panel with risk explanations and fixes
 - Top Talkers panel showing the busiest IPs with traffic bars
 - 5 built-in themes (press `t` to cycle)
@@ -64,10 +67,10 @@ The right panel automatically detects and explains:
 
 | Severity | Alert |
 |----------|-------|
-| CRITICAL | Telnet traffic (unencrypted remote access) |
-| HIGH | Cleartext HTTP, FTP |
+| CRITICAL | Telnet traffic (unencrypted remote access), ARP spoofing |
+| HIGH | Cleartext HTTP, FTP, DNS exfiltration rate, SYN half-open scan |
 | MEDIUM | Port scans, ICMP floods, DNS tunneling |
-| LOW | RST floods |
+| LOW | RST floods, new LAN host detected |
 
 Each alert includes a **Risk** explanation and a **Fix** recommendation on first occurrence.
 
