@@ -21,9 +21,16 @@ if [ ! -f "$STAMP" ] || [ "$SCRIPT_DIR/requirements.txt" -nt "$STAMP" ]; then
     touch "$STAMP"
 fi
 
-# ── 3. run (re-exec with sudo if needed for raw packet capture) ───────────────
+# ── 3. select script (--cli flag chooses the plain terminal sniffer) ─────────
+SCRIPT="$SCRIPT_DIR/sniffer_tui.py"
+if [[ "${1:-}" == "--cli" ]]; then
+    SCRIPT="$SCRIPT_DIR/sniffer.py"
+    shift
+fi
+
+# ── 4. run (re-exec with sudo if needed for raw packet capture) ───────────────
 if [ "$EUID" -ne 0 ]; then
-    exec sudo "$PYTHON" "$SCRIPT_DIR/sniffer_tui.py" "$@"
+    exec sudo "$PYTHON" "$SCRIPT" "$@"
 else
-    exec "$PYTHON" "$SCRIPT_DIR/sniffer_tui.py" "$@"
+    exec "$PYTHON" "$SCRIPT" "$@"
 fi

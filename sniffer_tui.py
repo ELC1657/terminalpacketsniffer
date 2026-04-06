@@ -8,11 +8,16 @@ from collections import defaultdict, deque
 from datetime import datetime
 
 try:
-    from scapy.all import sniff, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw, ARP, Ether
+    from scapy.all import sniff, wrpcap, rdpcap, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw, ARP, Ether
     from scapy.layers.http import HTTPRequest, HTTPResponse
 except ImportError:
     print("scapy not found - run: pip install scapy")
     exit(1)
+
+try:
+    from scapy.layers.inet6 import IPv6
+except ImportError:
+    IPv6 = None
 
 try:
     from textual.app import App, ComposeResult
@@ -138,7 +143,7 @@ def _ip_owner(ip: str) -> str:
     return "?"
 
 
-MAX_PACKETS = 500
+DEFAULT_BUFFER = 500
 
 
 class SnifferApp(App):
@@ -203,11 +208,12 @@ class SnifferApp(App):
     """
 
     BINDINGS = [
-        ("q", "quit",        "Quit"),
-        ("c", "clear_all",   "Clear"),
-        ("p", "pause",       "Pause"),
-        ("t", "next_theme",  "Theme"),
-        ("s", "cycle_speed", "Speed"),
+        ("q", "quit",         "Quit"),
+        ("c", "clear_all",    "Clear"),
+        ("p", "pause",        "Pause"),
+        ("t", "next_theme",   "Theme"),
+        ("s", "cycle_speed",  "Speed"),
+        ("w", "export_pcap",  "Export"),
         ("d",             "toggle_detail", "Detail"),
         ("left_square_bracket",  "prev_packet",   "◀ Prev"),
         ("right_square_bracket", "next_packet",   "Next ▶"),
@@ -227,7 +233,7 @@ class SnifferApp(App):
 
     # (label, packets processed per 100 ms tick)
     SPEEDS = [
-        ("Slow",   5),
+        ("Slow",   3),
         ("Normal", 50),
         ("Fast",   200),
     ]
@@ -235,10 +241,11 @@ class SnifferApp(App):
 
 
 
-    def __init__(self, interface=None, bpf_filter=None):
+    def __init__(self, interface=None, bpf_filter=None, pcap_file=None, buffer_size=DEFAULT_BUFFER):
         super().__init__()
         self.interface  = interface
         self.bpf_filter = bpf_filter
+        self.pcap_file  = pcap_file
         self.paused     = False
         self._theme_idx = 0
         self._speed_idx = 1  # default: Normal
@@ -254,11 +261,12 @@ class SnifferApp(App):
         self._dns_times:  dict[str, deque] = defaultdict(deque)
         self._known_lan:  set[str]         = set()
         self._half_open:  dict[tuple, float] = {}
+        self._bytes_total: int               = 0
 
         # pipeline
         self._pkt_queue:    queue.Queue  = queue.Queue()
         self._pending:      list         = []   # (Text, pkt) staged this tick
-        self._pkt_buf:      deque        = deque(maxlen=MAX_PACKETS)  # raw pkts for detail
+        self._pkt_buf:      deque        = deque(maxlen=buffer_size)  # raw pkts for detail
         self._detail_frozen: bool        = False
         self._detail_idx:   int          = -1   # -1 = live (last), 0..n = browsing
 
@@ -285,8 +293,11 @@ class SnifferApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.title     = "Packet Sniffer"
-        self.sub_title = f"iface: {self.interface or 'auto'} | filter: {self.bpf_filter or 'all'}"
+        self.title = "Packet Sniffer"
+        if self.pcap_file:
+            self.sub_title = f"reading: {self.pcap_file} | filter: {self.bpf_filter or 'all'}"
+        else:
+            self.sub_title = f"iface: {self.interface or 'auto'} | filter: {self.bpf_filter or 'all'}"
 
         self._w_pkt_log   = self.query_one("#pkt-log",    RichLog)
         self._w_alert_log = self.query_one("#alert-log",  RichLog)
@@ -311,12 +322,16 @@ class SnifferApp(App):
     # ── sniff / drain ──────────────────────────────────────────────────────
 
     def _sniff_thread(self) -> None:
-        sniff(
-            iface=self.interface,
-            filter=self.bpf_filter,
-            prn=lambda pkt: self._pkt_queue.put(pkt),
-            store=False,
-        )
+        if self.pcap_file:
+            for pkt in rdpcap(self.pcap_file):
+                self._pkt_queue.put(pkt)
+        else:
+            sniff(
+                iface=self.interface,
+                filter=self.bpf_filter,
+                prn=lambda pkt: self._pkt_queue.put(pkt),
+                store=False,
+            )
 
     def _drain_queue(self) -> None:
         _, limit = self.SPEEDS[self._speed_idx]
@@ -343,16 +358,24 @@ class SnifferApp(App):
         if self.paused:
             return
 
+        self._bytes_total += len(pkt)
+
         if ARP in pkt:
             self._handle_arp(pkt)
             return
 
-        if IP not in pkt:
+        ip_layer = None
+        if IP in pkt:
+            ip_layer = pkt[IP]
+        elif IPv6 is not None and IPv6 in pkt:
+            ip_layer = pkt[IPv6]
+
+        if ip_layer is None:
             return
 
         self.stats["Total"] += 1
-        src = pkt[IP].src
-        dst = pkt[IP].dst
+        src = ip_layer.src
+        dst = ip_layer.dst
         ts  = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
         self._ip_count[src] += 1
@@ -582,6 +605,9 @@ class SnifferApp(App):
                 return 16 <= int(ip.split(".")[1]) <= 31
             except (IndexError, ValueError):
                 pass
+        lower = ip.lower()
+        if lower.startswith("fe80:") or lower.startswith("fc") or lower.startswith("fd"):
+            return True
         return False
 
     def _check_half_open(self) -> None:
@@ -667,7 +693,9 @@ class SnifferApp(App):
         browse  = f"  [PKT {self._detail_idx + 1}/{n}]" if self._detail_frozen and n else ""
         paused  = "  [PAUSED]" if self.paused else ""
         parts   = "   ".join(f"{k}: {v}" for k, v in self.stats.items())
-        self._w_stats.update(f"  {parts}   Speed: {speed_label}{paused}{browse}")
+        b = self._bytes_total
+        bw = f"{b/1_048_576:.1f}MB" if b >= 1_048_576 else f"{b//1024}KB" if b >= 1024 else f"{b}B"
+        self._w_stats.update(f"  {parts}   Speed: {speed_label}  {bw}{paused}{browse}")
 
     def _show_detail(self) -> None:
         if not self._pkt_buf:
@@ -779,6 +807,18 @@ class SnifferApp(App):
         self._detail_idx = (self._detail_idx + 1) % len(self._pkt_buf)
         self._show_detail()
 
+    def action_export_pcap(self) -> None:
+        if not self._pkt_buf:
+            self.notify("No packets to export", timeout=2)
+            return
+        pkts = [pkt for _, pkt in self._pkt_buf]
+        path = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
+        try:
+            wrpcap(path, pkts)
+            self.notify(f"Saved {len(pkts)} packets → {path}", timeout=4)
+        except Exception as e:
+            self.notify(f"Export failed: {e}", severity="error", timeout=4)
+
 
 # ── helpers (module-level, no self) ───────────────────────────────────────
 
@@ -808,12 +848,16 @@ def main():
     ap.add_argument("-i", "--interface")
     ap.add_argument("-p", "--protocol", choices=["tcp", "udp", "icmp", "dns", "http"])
     ap.add_argument("--host")
-    ap.add_argument("--port", type=int)
+    ap.add_argument("--port",   type=int)
+    ap.add_argument("-r", "--read",   metavar="FILE",           help="Read from PCAP file instead of live capture")
+    ap.add_argument(      "--buffer", type=int, default=500,    help="Packet browser buffer size (default: 500)")
     args = ap.parse_args()
 
     SnifferApp(
         interface=args.interface,
         bpf_filter=build_bpf(args),
+        pcap_file=args.read,
+        buffer_size=args.buffer,
     ).run()
 
 
