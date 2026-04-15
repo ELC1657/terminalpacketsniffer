@@ -3,6 +3,17 @@
 # Usage: packetsniffer [-i INTERFACE] [-p PROTOCOL] [--host IP] [--port PORT]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Guard: if SCRIPT_DIR resolved incorrectly (e.g. BASH_SOURCE unset in some
+# sudo contexts), fail fast with a clear message instead of silently using the
+# wrong Python and script path.
+if [ ! -f "$SCRIPT_DIR/sniffer_tui.py" ]; then
+    echo "Error: packetsniffer could not locate the project files."
+    echo "Re-run the installer from the project directory:"
+    echo "  cd /path/to/packet-sniffer && sudo ./install"
+    exit 1
+fi
+
 VENV="$SCRIPT_DIR/venv"
 PYTHON="$VENV/bin/python"
 PIP="$VENV/bin/pip"

@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.22.0  | ✅ Current |
+| 0.25.0  | ✅ Current |
+| 0.22.0  | ❌ Outdated |
 | 0.20.0  | ❌ Outdated |
 | 0.13    | ❌ Outdated |
 | 0.12    | ❌ Outdated |

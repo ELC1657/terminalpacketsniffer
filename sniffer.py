@@ -7,14 +7,14 @@ from datetime import datetime
 from collections import defaultdict, deque
 
 try:
-    from scapy.all import sniff, wrpcap, rdpcap, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw, ARP, Ether
-    from scapy.layers.http import HTTPRequest, HTTPResponse
+    from scapy.all import sniff, wrpcap, rdpcap, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw, ARP  # type: ignore[attr-defined]
+    from scapy.layers.http import HTTPRequest, HTTPResponse  # type: ignore[attr-defined]
 except ImportError:
     print("scapy not found - run: pip install scapy")
     sys.exit(1)
 
 try:
-    from scapy.layers.inet6 import IPv6
+    from scapy.layers.inet6 import IPv6  # type: ignore[attr-defined]
 except ImportError:
     IPv6 = None
 
@@ -237,7 +237,7 @@ def format_packet(packet) -> str | None:
     return f"{C.WHITE}[IP/{proto}]{C.RESET}    {ts}  {src} -> {dst}"
 
 
-def on_exit(sig=None, frame=None):
+def on_exit(*_) -> None:
     if save_path and captured:
         wrpcap(save_path, list(captured))
         print(f"\nSaved {len(captured)} packets to {C.BOLD}{save_path}{C.RESET}")
@@ -330,6 +330,7 @@ def main():
             prn=callback,
             count=args.count,
             store=False,
+            promisc=False,
         )
         on_exit()
 

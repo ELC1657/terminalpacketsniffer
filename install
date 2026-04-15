@@ -13,11 +13,39 @@ fi
 # make the launcher executable
 chmod +x "$SCRIPT_DIR/packetsniffer"
 
-# write a tiny wrapper in /usr/local/bin so it's on PATH everywhere
-cat > "$TARGET" << EOF
+# write a self-contained wrapper in /usr/local/bin
+# SCRIPT_DIR is baked in at install time so there is no runtime path computation
+cat > "$TARGET" << WRAPPER
 #!/usr/bin/env bash
-exec "$SCRIPT_DIR/packetsniffer" "\$@"
-EOF
+SCRIPT_DIR="$SCRIPT_DIR"
+VENV="\$SCRIPT_DIR/venv"
+PYTHON="\$VENV/bin/python"
+PIP="\$VENV/bin/pip"
+STAMP="\$VENV/.installed"
+
+if [ ! -f "\$PYTHON" ]; then
+    echo "[setup] creating virtual environment..."
+    python3 -m venv "\$VENV"
+fi
+
+if [ ! -f "\$STAMP" ] || [ "\$SCRIPT_DIR/requirements.txt" -nt "\$STAMP" ]; then
+    echo "[setup] installing dependencies..."
+    "\$PIP" install -q -r "\$SCRIPT_DIR/requirements.txt"
+    touch "\$STAMP"
+fi
+
+SCRIPT="\$SCRIPT_DIR/sniffer_tui.py"
+if [[ "\${1:-}" == "--cli" ]]; then
+    SCRIPT="\$SCRIPT_DIR/sniffer.py"
+    shift
+fi
+
+if [ "\$EUID" -ne 0 ]; then
+    exec sudo "\$PYTHON" "\$SCRIPT" "\$@"
+else
+    exec "\$PYTHON" "\$SCRIPT" "\$@"
+fi
+WRAPPER
 
 chmod +x "$TARGET"
 echo "Done! You can now run:  packetsniffer"

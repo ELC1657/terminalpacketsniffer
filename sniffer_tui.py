@@ -6,16 +6,17 @@ import threading
 import time
 from collections import defaultdict, deque
 from datetime import datetime
+from typing import cast
 
 try:
-    from scapy.all import sniff, wrpcap, rdpcap, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw, ARP, Ether
-    from scapy.layers.http import HTTPRequest, HTTPResponse
+    from scapy.all import sniff, wrpcap, rdpcap, IP, TCP, UDP, ICMP, DNS, DNSQR, DNSRR, Raw, ARP  # type: ignore[attr-defined]
+    from scapy.layers.http import HTTPRequest, HTTPResponse  # type: ignore[attr-defined]
 except ImportError:
     print("scapy not found - run: pip install scapy")
     exit(1)
 
 try:
-    from scapy.layers.inet6 import IPv6
+    from scapy.layers.inet6 import IPv6  # type: ignore[attr-defined]
 except ImportError:
     IPv6 = None
 
@@ -271,11 +272,11 @@ class SnifferApp(App):
         self._detail_idx:   int          = -1   # -1 = live (last), 0..n = browsing
 
         # cached widget refs — set in on_mount, never query_one in hot path
-        self._w_pkt_log:   RichLog | None = None
-        self._w_alert_log: RichLog | None = None
-        self._w_detail:    RichLog | None = None
-        self._w_talkers:   Static | None  = None
-        self._w_stats:     Static | None  = None
+        self._w_pkt_log:   RichLog = cast(RichLog, None)
+        self._w_alert_log: RichLog = cast(RichLog, None)
+        self._w_detail:    RichLog = cast(RichLog, None)
+        self._w_talkers:   Static  = cast(Static, None)
+        self._w_stats:     Static  = cast(Static, None)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -322,15 +323,31 @@ class SnifferApp(App):
     # ── sniff / drain ──────────────────────────────────────────────────────
 
     def _sniff_thread(self) -> None:
-        if self.pcap_file:
-            for pkt in rdpcap(self.pcap_file):
-                self._pkt_queue.put(pkt)
-        else:
-            sniff(
-                iface=self.interface,
-                filter=self.bpf_filter,
-                prn=lambda pkt: self._pkt_queue.put(pkt),
-                store=False,
+        try:
+            if self.pcap_file:
+                for pkt in rdpcap(self.pcap_file):
+                    self._pkt_queue.put(pkt)
+            else:
+                sniff(
+                    iface=self.interface,
+                    filter=self.bpf_filter,
+                    prn=lambda pkt: self._pkt_queue.put(pkt),
+                    store=False,
+                    promisc=False,
+                )
+        except PermissionError:
+            self.call_from_thread(
+                self.notify,
+                "Permission denied — restart with sudo",
+                severity="error",
+                timeout=0,
+            )
+        except Exception as e:
+            self.call_from_thread(
+                self.notify,
+                f"Capture error: {e}",
+                severity="error",
+                timeout=0,
             )
 
     def _drain_queue(self) -> None:
@@ -341,7 +358,10 @@ class SnifferApp(App):
                 pkt = self._pkt_queue.get_nowait()
             except queue.Empty:
                 break
-            self._on_packet(pkt)
+            try:
+                self._on_packet(pkt)
+            except Exception:
+                pass
             processed += 1
 
         if self._pending:

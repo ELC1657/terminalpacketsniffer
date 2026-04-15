@@ -1,8 +1,8 @@
-# Terminal Packet Sniffer `v0.22.0`
+# Terminal Packet Sniffer `v0.25.0`
 
 A terminal-based network packet sniffer with a live TUI showing real-time traffic, automatic security alerts, and an interactive packet detail browser.
 
-![Version](https://img.shields.io/badge/version-0.22.0-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Version](https://img.shields.io/badge/version-0.25.0-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 ## Features
 
@@ -47,6 +47,11 @@ A terminal-based network packet sniffer with a live TUI showing real-time traffi
 - Stats bar showing per-protocol counts, speed, bandwidth, and browse position
 - Pause, clear, and quit without lag
 
+**Compatibility**
+- macOS Wi-Fi compatible : capture works on en0 without requiring promiscuous mode
+- In-TUI error notifications if capture fails to start (permission denied, bad interface, etc.)
+- Installer bakes in absolute paths so the global command works from any directory after `sudo ./install`
+
 ## Install
 
 **Requirements:** Python 3.8+, macOS or Linux
@@ -57,7 +62,9 @@ cd terminalpacketsniffer
 sudo ./install
 ```
 
-The install script handles everything; virtual environment, dependencies, and registering the command globally. No manual pip installs needed.
+The install script handles everything: virtual environment, dependencies, and registering the command globally. No manual pip installs needed.
+
+> **Migrating to a new machine?** Always delete the `venv/` folder before running `sudo ./install` on a new machine — virtualenvs are not portable between systems.
 
 ## Run
 
@@ -130,10 +137,28 @@ The right panel automatically detects and explains:
 
 Each alert includes a **Risk** explanation and a **Fix** recommendation on first occurrence. Repeated alerts are deduplicated and show a count badge. The CLI sniffer prints the same alerts inline with an `[ALERT SEVERITY]` prefix.
 
+## Troubleshooting
+
+**No packets appear after launching**
+- Make sure you are running via `packetsniffer` (not `python3 sniffer_tui.py` directly) — the launcher handles `sudo` automatically
+- A red notification in the TUI will tell you if capture failed to start and why
+- On macOS, specify the interface explicitly: `packetsniffer -i en0`
+
+**"Cannot set promiscuous mode" error**
+- This is a macOS restriction on Wi-Fi interfaces and is handled automatically in v0.25.0 — update and reinstall
+
+**Global command uses wrong paths after moving to a new machine**
+- Delete the old venv: `rm -rf venv`
+- Re-run the installer from the project directory: `sudo ./install`
+- This bakes the correct absolute paths into the global command
+
+**The `venv/` from another machine doesn't work**
+- Virtualenvs are not portable. Always rebuild: `rm -rf venv && sudo ./install`
+
 ## Notes
 
 - Requires `sudo` — raw packet capture needs root privileges
 - The `venv/` directory is created locally and not included in the repo
-- Tested on macOS and Linux
+- Tested on macOS (Intel and Apple Silicon) and Linux
 - Packet detail browser holds the last 500 packets in memory by default (configurable with `--buffer`)
 - PCAP exports are written to the current working directory with a timestamp filename
