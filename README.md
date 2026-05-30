@@ -1,8 +1,8 @@
-# Terminal Packet Sniffer `v0.25.0`
+# Terminal Packet Sniffer `v0.26.0`
 
 A terminal-based network packet sniffer with a live TUI showing real-time traffic, automatic security alerts, and an interactive packet detail browser.
 
-![Version](https://img.shields.io/badge/version-0.25.0-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Version](https://img.shields.io/badge/version-0.26.0-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 ## Features
 
@@ -22,6 +22,7 @@ A terminal-based network packet sniffer with a live TUI showing real-time traffi
 - SYN half-open (stealth) scan detection
 - ARP spoofing detection (multiple MACs claiming same IP)
 - New LAN host alerts (IPv4 and IPv6 private ranges)
+- Passive OS fingerprinting : new LAN host alerts include a TTL/window-based OS guess (Linux/macOS, Windows, Net Device)
 - All detections also available in the CLI sniffer (`sniffer.py`)
 
 **Packet Detail Browser**
@@ -43,7 +44,7 @@ A terminal-based network packet sniffer with a live TUI showing real-time traffi
 
 **UI**
 - 9 built-in themes (press `t` to cycle)
-- Top Talkers panel with live traffic bars and provider labels
+- Top Talkers panel with live traffic bars, provider labels, and passive OS fingerprint
 - Stats bar showing per-protocol counts, speed, bandwidth, and browse position
 - Pause, clear, and quit without lag
 
@@ -133,7 +134,7 @@ The right panel automatically detects and explains:
 | CRITICAL | Telnet traffic (unencrypted remote access), ARP spoofing |
 | HIGH | Cleartext HTTP, FTP, DNS exfiltration rate, SYN half-open scan, suspicious DNS |
 | MEDIUM | Port scans, ICMP floods, DNS tunneling |
-| LOW | RST floods, new LAN host detected |
+| LOW | RST floods, new LAN host detected (with passive OS fingerprint) |
 
 Each alert includes a **Risk** explanation and a **Fix** recommendation on first occurrence. Repeated alerts are deduplicated and show a count badge. The CLI sniffer prints the same alerts inline with an `[ALERT SEVERITY]` prefix.
 

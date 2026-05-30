@@ -144,6 +144,19 @@ def _ip_owner(ip: str) -> str:
     return "?"
 
 
+def _guess_os(ttl: int, window: int | None) -> str:
+    init_ttl = 255 if ttl > 128 else 128 if ttl > 64 else 64
+    if init_ttl == 255:
+        return "Net Device"
+    if init_ttl == 128:
+        if window == 64240: return "Win 10/11"
+        if window == 8192:  return "Win XP/Vista"
+        return "Windows"
+    if window == 65535:  return "macOS/BSD"
+    if window in (29200, 14600, 5840): return "Linux"
+    return "Linux/macOS"
+
+
 DEFAULT_BUFFER = 500
 
 
@@ -260,8 +273,9 @@ class SnifferApp(App):
         self._ip_count:   dict[str, int]   = defaultdict(int)
         self._arp_table:  dict[str, set]   = defaultdict(set)
         self._dns_times:  dict[str, deque] = defaultdict(deque)
-        self._known_lan:  set[str]         = set()
-        self._half_open:  dict[tuple, float] = {}
+        self._known_lan:      set[str]         = set()
+        self._os_fingerprints: dict[str, str]  = {}
+        self._half_open:      dict[tuple, float] = {}
         self._bytes_total: int               = 0
 
         # pipeline
@@ -401,9 +415,17 @@ class SnifferApp(App):
         self._ip_count[src] += 1
         self._ip_count[dst] += 1
 
+        if src not in self._os_fingerprints:
+            ttl = getattr(ip_layer, "ttl", None) or getattr(ip_layer, "hlim", None)
+            win = pkt[TCP].window if TCP in pkt else None
+            if ttl:
+                self._os_fingerprints[src] = _guess_os(ttl, win)
+
         if self._is_lan(src) and src not in self._known_lan:
             self._known_lan.add(src)
-            self._alert("LOW", f"New LAN Host: {src}", src)
+            os_hint = self._os_fingerprints.get(src, "")
+            detail = f"{src}  [{os_hint}]" if os_hint else src
+            self._alert("LOW", f"New LAN Host: {src}", detail)
 
         if TCP in pkt:
             self._handle_tcp(pkt, src, dst, ts)
@@ -701,10 +723,13 @@ class SnifferApp(App):
         for ip, count in top:
             filled = int((count / max_cnt) * bar_w)
             bar    = "#" * filled + "." * (bar_w - filled)
+            owner   = _ip_owner(ip)
+            os_hint = self._os_fingerprints.get(ip, "")
+            label   = f"{owner} · {os_hint}" if os_hint else owner
             out.append(f" {ip:<17}", style="white")
             out.append(bar, style="green")
             out.append(f"  {count:>5}  ", style="dim white")
-            out.append(f"{_ip_owner(ip)}\n", style="cyan")
+            out.append(f"{label}\n", style="cyan")
         self._w_talkers.update(out)
 
     def _refresh_stats(self) -> None:
