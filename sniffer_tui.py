@@ -229,6 +229,7 @@ class SnifferApp(App):
         ("s", "cycle_speed",  "Speed"),
         ("w", "export_pcap",  "Export"),
         ("d",             "toggle_detail", "Detail"),
+        ("f",             "toggle_flows",  "Flows"),
         ("left_square_bracket",  "prev_packet",   "◀ Prev"),
         ("right_square_bracket", "next_packet",   "Next ▶"),
     ]
@@ -277,6 +278,8 @@ class SnifferApp(App):
         self._os_fingerprints: dict[str, str]  = {}
         self._half_open:      dict[tuple, float] = {}
         self._bytes_total: int               = 0
+        self._flows:       dict[tuple, dict] = {}
+        self._flows_view:  bool              = False
 
         # pipeline
         self._pkt_queue:    queue.Queue  = queue.Queue()
@@ -333,6 +336,7 @@ class SnifferApp(App):
         self.set_interval(1.0, self._refresh_stats)
         self.set_interval(2.0, self._refresh_talkers)
         self.set_interval(5.0, self._check_half_open)
+        self.set_interval(1.0, self._tick_flows)
 
     # ── sniff / drain ──────────────────────────────────────────────────────
 
@@ -442,6 +446,8 @@ class SnifferApp(App):
         self.stats["TCP"] += 1
         sp, dp = pkt[TCP].sport, pkt[TCP].dport
         flags  = str(pkt[TCP].flags)
+
+        self._update_flow(src, dst, sp, dp, flags, len(pkt))
 
         if HTTPRequest in pkt:
             self.stats["HTTP"] += 1
@@ -605,6 +611,28 @@ class SnifferApp(App):
                 macs = ", ".join(self._arp_table[arp.psrc])
                 self._alert("CRITICAL", "ARP Spoofing", f"{arp.psrc} claimed by: {macs}")
 
+    def _update_flow(self, src: str, dst: str, sport: int, dport: int, flags: str, pkt_len: int) -> None:
+        key = (src, sport, dst, dport)
+        rev = (dst, dport, src, sport)
+        now = time.monotonic()
+        if key in self._flows:
+            k = key
+        elif rev in self._flows:
+            k = rev
+        else:
+            k = key
+            state = "SYN" if ("S" in flags and "A" not in flags) else "ESTAB"
+            self._flows[k] = {"state": state, "start": now, "last": now, "bytes": 0}
+        f = self._flows[k]
+        f["last"]  = now
+        f["bytes"] += pkt_len
+        if "R" in flags:
+            f["state"] = "CLOSED"
+        elif "F" in flags:
+            f["state"] = "CLOSED" if f["state"] == "FIN" else "FIN"
+        elif "S" in flags and "A" in flags and f["state"] == "SYN":
+            f["state"] = "ESTAB"
+
     def _stage(self, text: Text, pkt) -> None:
         self._pending.append((text, pkt))
 
@@ -713,8 +741,41 @@ class SnifferApp(App):
 
     # ── UI refresh ─────────────────────────────────────────────────────────
 
+    def _tick_flows(self) -> None:
+        now = time.monotonic()
+        stale = [k for k, f in self._flows.items()
+                 if (f["state"] == "CLOSED" and now - f["last"] > 10)
+                 or now - f["last"] > 120]
+        for k in stale:
+            self._flows.pop(k, None)
+        if self._flows_view:
+            self._render_flows()
+
+    def _render_flows(self) -> None:
+        if not self._flows:
+            self._w_talkers.update(Text("  No TCP flows yet", style="dim white"))
+            return
+        now    = time.monotonic()
+        _order = {"ESTAB": 0, "SYN": 1, "FIN": 2, "CLOSED": 3}
+        _style = {"ESTAB": "bold green", "SYN": "yellow", "FIN": "dim white", "CLOSED": "dim red"}
+        top = sorted(self._flows.items(),
+                     key=lambda x: (_order.get(x[1]["state"], 9), -x[1]["bytes"]))[:8]
+        out = Text()
+        for (src, sport, dst, dport), f in top:
+            dur     = int(now - f["start"])
+            dur_str = f"{dur // 60}:{dur % 60:02d}"
+            b       = f["bytes"]
+            bw      = f"{b/1_048_576:.1f}MB" if b >= 1_048_576 else f"{b//1024}KB" if b >= 1024 else f"{b}B"
+            state   = f["state"]
+            out.append(f" {src}:{sport}", style="white")
+            out.append(" → ", style="dim white")
+            out.append(f"{dst}:{dport}", style="cyan")
+            out.append(f"  {state:<6}", style=_style.get(state, "white"))
+            out.append(f"  {dur_str}  {bw}\n", style="dim white")
+        self._w_talkers.update(out)
+
     def _refresh_talkers(self) -> None:
-        if not self._ip_count:
+        if self._flows_view or not self._ip_count:
             return
         top      = sorted(self._ip_count.items(), key=lambda x: -x[1])[:6]
         max_cnt  = top[0][1] or 1
@@ -801,8 +862,12 @@ class SnifferApp(App):
         self._w_detail.clear()
         self._pkt_buf.clear()
         self._pending.clear()
+        self._flows.clear()
         self._detail_frozen = False
         self._detail_idx    = -1
+        if self._flows_view:
+            self._flows_view = False
+            self.query_one("#talkers-pane").border_title = "  Top Talkers"
         self._w_detail.write(Text("Press [d] to browse packets  [ ] to step through", style="dim white"))
         self.query_one("#detail-pane").border_title = "  Packet Detail  [d] browse"
 
@@ -851,6 +916,16 @@ class SnifferApp(App):
             return
         self._detail_idx = (self._detail_idx + 1) % len(self._pkt_buf)
         self._show_detail()
+
+    def action_toggle_flows(self) -> None:
+        self._flows_view = not self._flows_view
+        pane = self.query_one("#talkers-pane")
+        if self._flows_view:
+            pane.border_title = "  TCP Flows  [f] back"
+            self._render_flows()
+        else:
+            pane.border_title = "  Top Talkers"
+            self._refresh_talkers()
 
     def action_export_pcap(self) -> None:
         if not self._pkt_buf:

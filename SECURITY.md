@@ -4,11 +4,11 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.26.0  | ✅ Current |
+| 0.27.0  | ✅ Current |
+| 0.26.0  | ❌ Outdated |
 | 0.25.0  | ❌ Outdated |
 | 0.22.0  | ❌ Outdated |
 | 0.20.0  | ❌ Outdated |
-| 0.13    | ❌ Outdated |
 
 ## Reporting a Vulnerability
 

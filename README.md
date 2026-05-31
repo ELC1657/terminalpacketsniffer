@@ -1,8 +1,8 @@
-# Terminal Packet Sniffer `v0.26.0`
+# Terminal Packet Sniffer `v0.27.0`
 
 A terminal-based network packet sniffer with a live TUI showing real-time traffic, automatic security alerts, and an interactive packet detail browser.
 
-![Version](https://img.shields.io/badge/version-0.26.0-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Version](https://img.shields.io/badge/version-0.27.0-orange) ![Python](https://img.shields.io/badge/python-3.8+-blue) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 ## Features
 
@@ -45,6 +45,7 @@ A terminal-based network packet sniffer with a live TUI showing real-time traffi
 **UI**
 - 9 built-in themes (press `t` to cycle)
 - Top Talkers panel with live traffic bars, provider labels, and passive OS fingerprint
+- TCP Flow Tracker : press `f` to switch the bottom-right panel to a live connection table showing src→dst, state (SYN / ESTAB / FIN / CLOSED), duration, and bytes
 - Stats bar showing per-protocol counts, speed, bandwidth, and browse position
 - Pause, clear, and quit without lag
 
@@ -102,6 +103,7 @@ packetsniffer --cli -v                  # verbose: raw Scapy layer dump
 | Key | Action |
 |-----|--------|
 | `d` | Enter / exit packet detail browse mode |
+| `f` | Toggle TCP flow tracker (replaces Top Talkers panel) |
 | `[` | Previous packet (browse mode) |
 | `]` | Next packet (browse mode) |
 | `w` | Export packet buffer to a `.pcap` file |
