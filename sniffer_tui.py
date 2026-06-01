@@ -144,16 +144,20 @@ def _ip_owner(ip: str) -> str:
     return "?"
 
 
-def _guess_os(ttl: int, window: int | None) -> str:
+def _guess_os(ttl: int, window: int | None, tcp_opts: list | None = None) -> str:
     init_ttl = 255 if ttl > 128 else 128 if ttl > 64 else 64
     if init_ttl == 255:
         return "Net Device"
+    opt_names = {name for name, _ in (tcp_opts or [])}
+    has_ts = "Timestamp" in opt_names
     if init_ttl == 128:
-        if window == 64240: return "Win 10/11"
-        if window == 8192:  return "Win XP/Vista"
+        if window == 64240:                    return "Win 10/11"
+        if window == 8192:                     return "Win XP/Vista"
+        if window == 65535 and not has_ts:     return "Windows 7/8"
         return "Windows"
-    if window == 65535:  return "macOS/BSD"
-    if window in (29200, 14600, 5840): return "Linux"
+    # TTL 64 → Unix family
+    if window == 65535:                        return "macOS/iOS/BSD"
+    if window in (29200, 65495, 5840, 14600): return "Linux/Android"
     return "Linux/macOS"
 
 
@@ -421,9 +425,12 @@ class SnifferApp(App):
 
         if src not in self._os_fingerprints:
             ttl = getattr(ip_layer, "ttl", None) or getattr(ip_layer, "hlim", None)
-            win = pkt[TCP].window if TCP in pkt else None
             if ttl:
-                self._os_fingerprints[src] = _guess_os(ttl, win)
+                win, opts = None, None
+                if TCP in pkt and "S" in str(pkt[TCP].flags):  # SYN or SYN-ACK only
+                    win  = pkt[TCP].window
+                    opts = pkt[TCP].options
+                self._os_fingerprints[src] = _guess_os(ttl, win, opts)
 
         if self._is_lan(src) and src not in self._known_lan:
             self._known_lan.add(src)
